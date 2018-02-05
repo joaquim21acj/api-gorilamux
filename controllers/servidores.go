@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"regexp"
+	"strconv"
 	"time"
 
 	"github.com/latitude-RESTsec-lab/api-gorilamux/db"
@@ -187,6 +188,22 @@ func (ctrl ServidorController) PostServidor(w http.ResponseWriter, r *http.Reque
 		Reasons = append(Reasons, ErrorBody{
 			Reason: "[data_nascimento] failed to match API requirements. It should look like this: 1969-02-12",
 		})
+	} else {
+		now := time.Now()
+		now.Format(time.RFC3339)
+		time, err := time.Parse("2006-01-02 15:04:05 -0200", fmt.Sprint(ser.Datanascimento, " 00:00:00 -0200"))
+		if err != nil {
+			log.Println(err)
+			w.WriteHeader(500)
+			json.NewEncoder(w).Encode(ErrorBody{
+				Reason: err.Error(),
+			})
+		}
+		if !now.After(time) {
+			regexcheck = true
+			Reasons = append(Reasons, ErrorBody{
+				Reason: "[data_nascimento] failed to match API requirements. It should not be in future."})
+		}
 	}
 	regex, _ = regexp.Compile(`^([A-Z][a-z]+([ ]?[a-z]?['-]?[A-Z][a-z]+)*)$`)
 	if !regex.MatchString(ser.Nome) {
@@ -194,12 +211,22 @@ func (ctrl ServidorController) PostServidor(w http.ResponseWriter, r *http.Reque
 		Reasons = append(Reasons, ErrorBody{
 			Reason: "[nome] failed to match API requirements. It should look like this: Firstname Middlename(optional) Lastname",
 		})
+	} else if len(ser.Nome) > 100 {
+		regexcheck = true
+		Reasons = append(Reasons, ErrorBody{
+			Reason: "[nome] failed to match API requirements. It shoud have a maximum of 100 characters",
+		})
 	}
 	regex, _ = regexp.Compile(`^([A-Z][a-z]+([ ]?[a-z]?['-]?[A-Z][a-z]+)*)$`)
 	if !regex.MatchString(ser.Nomeidentificacao) {
 		regexcheck = true
 		Reasons = append(Reasons, ErrorBody{
 			Reason: "[nome_identificacao] failed to match API requirements. It should look like this: Firstname Middlename(optional) Lastname",
+		})
+	} else if len(ser.Nome) > 100 {
+		regexcheck = true
+		Reasons = append(Reasons, ErrorBody{
+			Reason: "[nome_identificacao] failed to match API requirements. It shoud have a maximum of 100 characters",
 		})
 	}
 	regex, _ = regexp.Compile(`\b[MF]{1}\b`)
@@ -219,13 +246,13 @@ func (ctrl ServidorController) PostServidor(w http.ResponseWriter, r *http.Reque
 	timestamp := time.Now().UTC().Format("2006-01-02T15:04:05-0700")
 	b := md5.Sum([]byte(fmt.Sprintf(string(ser.Nome), string(timestamp))))
 	bid := binary.BigEndian.Uint64(b[:])
-
+	ser.Matriculainterna = int(bid % 9999999)
 	q := fmt.Sprintf(`
 		INSERT INTO rh.servidor_tmp(
 			nome, nome_identificacao, siape, id_pessoa, matricula_interna, id_foto,
 			data_nascimento, sexo)
 			VALUES ('%s', '%s', %d, %d, %d, null, '%s', '%s');
-			`, ser.Nome, ser.Nomeidentificacao, ser.Siape, ser.Idpessoa, bid%9999999,
+			`, ser.Nome, ser.Nomeidentificacao, ser.Siape, ser.Idpessoa, ser.Matriculainterna,
 		ser.Datanascimento, ser.Sexo) //String formating
 
 	rows, err := db.GetDB().Query(q)
@@ -241,7 +268,9 @@ func (ctrl ServidorController) PostServidor(w http.ResponseWriter, r *http.Reque
 
 	defer rows.Close()
 
+	w.Header().Set("location", "https://"+r.Host+"/api/servidor/"+strconv.Itoa(ser.Matriculainterna))
 	w.WriteHeader(201)
+
 	log.Print("[MUX] " + " | 201 | " + r.Method + "  " + r.URL.Path)
 
 	return
